@@ -1,12 +1,14 @@
 import asyncio
+import textwrap
 from datetime import datetime
 
 from aiogram import Dispatcher
 from aiogram.dispatcher import FSMContext
 from aiogram.types import Message, ParseMode, CallbackQuery
+from aiogram.utils.exceptions import MessageNotModified
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from APIs.MarketsAPI import MarketsAPI
+from APIs import CcxtAPI
 from db_session import session_db
 from keys.percents import generate_percents_settings_keyboard
 from keys.settings import *
@@ -19,8 +21,8 @@ async def format_arbitrage(type_arb, arbitrages: list):
         string = arbitrages
     else:
         string = "\n".join([
-            f"{arbitrage['pair']}\n"
-            f"{arbitrage['buy_exchange']} {arbitrage['sell_exchange']} = {arbitrage['arbitrage']}%"
+            f"{arbitrage['symbol']}\n"
+            f"{arbitrage['buy_exchange']}/{arbitrage['sell_exchange']} = {'%.2f' % arbitrage['opportunity']}%"
             for arbitrage in arbitrages
         ])
     arbitrage_str = f"Актуальный арбитраж на {datetime.now().time().strftime('%H:%M')}\n" \
@@ -91,45 +93,31 @@ async def get_arbitrage(callback_query: CallbackQuery, state: FSMContext, sessio
     await state.set_state(UserStates.arbitrage_loop)
     msg = await callback_query.message.edit_text(text="Загрузка данных")
 
+    user = await Users.get_user_by_tg_id(session, callback_query.from_user.id)
     user_data = await state.get_data()
-    chosen_exchanges = user_data.get('chosen_exchanges', None)
-    chosen_percents = user_data.get('chosen_percents', None)
+    chosen_exchanges = user_data.get('chosen_exchanges')
+    chosen_percents = user_data.get('chosen_percents')
 
-    user: Users = await Users.get_user_by_tg_id(session, callback_query.from_user.id)
-    menu_kb = generate_percents_settings_keyboard(chosen_percents)
+    while True:
+        full_arbitrage = await async_test.get_arbitrage(chosen_exchanges)
+        percent_arbitrage = full_arbitrage[chosen_percents]
 
-    real_time_state = await state.get_state()
-    while user.arb_auto_update and \
-            real_time_state == 'UserStates:arbitrage_loop' and \
-            chosen_percents == user_data.get('chosen_percents', None):
-        api = MarketsAPI()
-        await msg.edit_text(text="Получаем список торговых пар для каждой биржи", )
-        common_pairs, all_exchanges = await api.get_all_prices(chosen_exchanges)
-        await msg.edit_text(text="Находим цену покупки и продажи на каждой бирже для каждой общей пары", )
-        buy_sell_prices = await api.get_buy_sell_prices(all_exchanges, common_pairs)
-        await msg.edit_text(text="Находим арбитраж на каждой общей паре")
-        full_arbitrage = await api.calculate_arbitrage(buy_sell_prices)
-        if full_arbitrage:
-            await msg.edit_text(text="Проверяем валидность полученных пар")
-            valid_arbitrage = await api.check_pair_validity(full_arbitrage[chosen_percents])
-        else:
-            valid_arbitrage = full_arbitrage[chosen_percents] \
-                if len(full_arbitrage[chosen_percents]) > 0 else "Не найдено подходящих пар"
+        text = await format_arbitrage(chosen_percents, percent_arbitrage)
+        menu_kb = generate_percents_settings_keyboard(chosen_percents)
 
-        await msg.edit_text(
-            text=await format_arbitrage(chosen_percents, valid_arbitrage),
-            parse_mode=ParseMode.HTML,
-            reply_markup=menu_kb
-        )
-
+        try:
+            await msg.edit_text(
+                text=textwrap.dedent(text),
+                parse_mode=ParseMode.HTML,
+                reply_markup=menu_kb
+            )
+        except MessageNotModified:
+            continue
+        await asyncio.sleep(user.arb_auto_update * 60)
         user_data = await state.get_data()
-        real_time_state = await state.get_state()
-        if real_time_state != 'UserStates:arbitrage_loop' or chosen_percents != user_data.get('chosen_percents', None):
+        user_state = await state.get_state()
+        if user_state != "UserStates:arbitrage_loop" or chosen_percents != user_data.get('chosen_percents'):
             break
-        else:
-            await asyncio.sleep(user.arb_auto_update * 60)
-        real_time_state = await state.get_state()
-        user_data = await state.get_data()
 
 
 def register_handlers_default(dp: Dispatcher):

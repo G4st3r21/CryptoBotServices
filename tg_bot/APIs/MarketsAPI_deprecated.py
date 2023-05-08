@@ -1,6 +1,6 @@
+import asyncio
+
 from httpx import AsyncClient
-import ccxt
-import Pair
 
 
 class MarketsAPI:
@@ -45,7 +45,6 @@ class MarketsAPI:
             pairs = []
             prices = {}
             for symbol in data:
-                pair = Pair()
                 pair = symbol['symbol']
                 buy, sell = float(symbol['price']), float(symbol['price'])
                 pairs.append(pair)
@@ -100,7 +99,7 @@ class MarketsAPI:
     async def get_buy_sell_prices(all_exchanges, common_pairs):
         # создаем словарь, где ключ - общая пара, а значение - список цен на каждой бирже
         price_dict = {
-            Pair(
+            pair: {
                 'buy': [
                     [key, exchanges[-1][pair][0], exchanges[-1][pair][1]]
                     for key, exchanges in all_exchanges.items()
@@ -109,7 +108,7 @@ class MarketsAPI:
                     [key, exchanges[-1][pair][0], exchanges[-1][pair][-1]]
                     for key, exchanges in all_exchanges.items()
                 ]
-        )
+            }
             for pair in common_pairs
         }
 
@@ -141,31 +140,36 @@ class MarketsAPI:
             sell_exchange = prices['sell_exchange']
             buy_price = prices['buy_price']
             sell_price = prices['sell_price']
-            arbitrage = (sell_price / buy_price - 1) * 100
-            if 0.9 < arbitrage < 3:
-                arb_pairs["0.9-3"].append({
-                    'pair': pair, 'valid_symbols': prices['valid_symbols'],
-                    'buy_exchange': buy_exchange, 'sell_exchange': sell_exchange, 'arbitrage': arbitrage,
-                    'starting_asset': starting_asset, 'usd_value': starting_asset / buy_price * 0.998
-                })
-            elif 3 <= arbitrage < 5:
-                arb_pairs["3-5"].append({
-                    'pair': pair, 'valid_symbols': prices['valid_symbols'],
-                    'buy_exchange': buy_exchange, 'sell_exchange': sell_exchange, 'arbitrage': arbitrage,
-                    'starting_asset': starting_asset, 'usd_value': starting_asset / buy_price * 0.998
-                })
-            elif 5 <= arbitrage < 8:
-                arb_pairs["5-8"].append({
-                    'pair': pair, 'valid_symbols': prices['valid_symbols'],
-                    'buy_exchange': buy_exchange, 'sell_exchange': sell_exchange, 'arbitrage': arbitrage,
-                    'starting_asset': starting_asset, 'usd_value': starting_asset / buy_price * 0.998
-                })
-            elif arbitrage >= 8:
-                arb_pairs["8+"].append({
-                    'pair': pair, 'valid_symbols': prices['valid_symbols'],
-                    'buy_exchange': buy_exchange, 'sell_exchange': sell_exchange, 'arbitrage': arbitrage,
-                    'starting_asset': starting_asset, 'usd_value': starting_asset / buy_price * 0.998
-                })
+            if buy_price < sell_price:
+                arbitrage = (sell_price / buy_price - 1) * 100
+                if 0.9 < arbitrage < 3:
+                    print(pair, arbitrage)
+                    arb_pairs["0.9-3"].append({
+                        'pair': pair, 'valid_symbols': prices['valid_symbols'],
+                        'buy_exchange': buy_exchange, 'sell_exchange': sell_exchange, 'arbitrage': arbitrage,
+                        'starting_asset': starting_asset, 'usd_value': starting_asset / buy_price * 0.998
+                    })
+                elif 3 <= arbitrage < 5:
+                    print(pair, arbitrage)
+                    arb_pairs["3-5"].append({
+                        'pair': pair, 'valid_symbols': prices['valid_symbols'],
+                        'buy_exchange': buy_exchange, 'sell_exchange': sell_exchange, 'arbitrage': arbitrage,
+                        'starting_asset': starting_asset, 'usd_value': starting_asset / buy_price * 0.998
+                    })
+                elif 5 <= arbitrage < 8:
+                    print(pair, arbitrage)
+                    arb_pairs["5-8"].append({
+                        'pair': pair, 'valid_symbols': prices['valid_symbols'],
+                        'buy_exchange': buy_exchange, 'sell_exchange': sell_exchange, 'arbitrage': arbitrage,
+                        'starting_asset': starting_asset, 'usd_value': starting_asset / buy_price * 0.998
+                    })
+                elif arbitrage >= 8:
+                    print(pair, arbitrage)
+                    arb_pairs["8+"].append({
+                        'pair': pair, 'valid_symbols': prices['valid_symbols'],
+                        'buy_exchange': buy_exchange, 'sell_exchange': sell_exchange, 'arbitrage': arbitrage,
+                        'starting_asset': starting_asset, 'usd_value': starting_asset / buy_price * 0.998
+                    })
         arb_pairs["0.9-3"].sort(reverse=True, key=lambda x: x['arbitrage'])
         arb_pairs["3-5"].sort(reverse=True, key=lambda x: x['arbitrage'])
         arb_pairs["5-8"].sort(reverse=True, key=lambda x: x['arbitrage'])
@@ -174,28 +178,38 @@ class MarketsAPI:
         return arb_pairs
 
     # TODO: дописать функцию валидности пар
-    @staticmethod
-    async def check_pair_validity(pairs: list[dict]):
-        exchange_names = ['huobipro', 'binance', 'kucoin']
-        valid_pairs = []
+    # @staticmethod
+    # async def check_pair_validity(pairs: list[dict]):
+    #     exchange_names = ['huobipro', 'binance', 'kucoin']
+    #     valid_pairs = []
+    #
+    #     for pair in pairs:
+    #         symbol = pair['valid_symbols']  # symbol format - "AAAA/BBBB"
+    #         for exchange_name in exchange_names:
+    #             exchange = ccxt.__getattribute__(exchange_name)()
+    #
+    #             try:
+    #                 orderbook = exchange.fetch_order_book(symbol)
+    #                 bid_price = orderbook['bids'][0][0] if len(orderbook['bids']) > 0 else None
+    #                 ask_price = orderbook['asks'][0][0] if len(orderbook['asks']) > 0 else None
+    #
+    #                 if bid_price is not None and ask_price is not None:
+    #                     print(f"{exchange_name}: Buy {symbol} at {ask_price}, Sell {symbol} at {bid_price}")
+    #                     valid_pairs.append(pair)
+    #                 else:
+    #                     print(f"{exchange_name}: {symbol} is not tradable")
+    #
+    #             except ccxt.ExchangeError:
+    #                 print(f"{exchange_name}: {symbol} is not supported on this exchange")
 
-        for pair in pairs:
-            symbol = pair['valid_symbols']  # symbol format - "AAAA/BBBB"
-            for exchange_name in exchange_names:
-                exchange = ccxt.__getattribute__(exchange_name)()
 
-                try:
-                    orderbook = exchange.fetch_order_book(symbol)
-                    bid_price = orderbook['bids'][0][0] if len(orderbook['bids']) > 0 else None
-                    ask_price = orderbook['asks'][0][0] if len(orderbook['asks']) > 0 else None
+if __name__ == '__main__':
+    api = MarketsAPI()
 
-                    if bid_price is not None and ask_price is not None:
-                        print(f"{exchange_name}: Buy {symbol} at {ask_price}, Sell {symbol} at {bid_price}")
-                        valid_pairs.append(pair)
-                    else:
-                        print(f"{exchange_name}: {symbol} is not tradable")
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
-                except ccxt.ExchangeError:
-                    print(f"{exchange_name}: {symbol} is not supported on this exchange")
-
-        return valid_pairs
+    common_pairs, all_exchanges = loop.run_until_complete(api.get_all_prices(["binance", "huobi", "kucoin"]))
+    buy_sell_prices = loop.run_until_complete(api.get_buy_sell_prices(all_exchanges, common_pairs))
+    full_arbitrage = loop.run_until_complete((api.calculate_arbitrage(buy_sell_prices)))
+    # print(full_arbitrage)
