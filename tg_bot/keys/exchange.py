@@ -1,7 +1,7 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
-def generate_exchange_settings_keyboard(chosen_exchanges=None):
+def get_exchange_settings_kb(chosen_exchanges=None):
     if chosen_exchanges is None:
         chosen_exchanges = []
 

@@ -1,7 +1,18 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
-def generate_settings_keyboard(settings_set=False):
+def get_arbitrages_kb():
+    setting_kb = InlineKeyboardMarkup(row_width=3)
+    setting_kb.row(
+        InlineKeyboardButton("DEX", callback_data="DEX"),
+        InlineKeyboardButton("CEX", callback_data="CEX"),
+        InlineKeyboardButton("P2P", callback_data="P2P")
+    )
+
+    return setting_kb
+
+
+def get_settings_kb(settings_set=False):
     setting_kb = InlineKeyboardMarkup(row_width=2)
     setting_kb.row(
         InlineKeyboardButton("Выбор бирж", callback_data="exchanges_prices"),
@@ -19,7 +30,7 @@ def generate_settings_keyboard(settings_set=False):
     return setting_kb
 
 
-def generate_menu_keyboard():
+def get_menu_kb():
     menu_kb = InlineKeyboardMarkup(row_width=1)
     menu_kb.row(
         InlineKeyboardButton("В меню", callback_data="menu"),

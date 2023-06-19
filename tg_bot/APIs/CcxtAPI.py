@@ -1,78 +1,142 @@
 import asyncio
+import textwrap
 
 import ccxt.async_support as ccxt
+from aiogram.types import Message
+from aiogram.utils.exceptions import MessageNotModified
+from ccxt import RequestTimeout
 
-async def get_tickers(exchange):
-    try:
-        tickers = await exchange.fetch_tickers()
-    except Exception as e:
-        print(f"Ошибка загрузки информации по {exchange.id}, повторный запрос...")
-        return await get_tickers(exchange)
-    finally:
-        await exchange.close()
-    return tickers
+from APIs.PairList import PairList, Pair
 
 
-async def get_markets(exchange):
-    try:
-        markets = await exchange.load_markets()
-    except Exception as e:
-        print(f"Ошибка загрузки информации по '{exchange.id}', повторный запрос...")
-        return await get_markets(exchange)
-    finally:
-        await exchange.close()
-    return markets
+class CcxtAPI:
+    states = [
+        1, 2, 3, 4
+    ]
 
+    def __init__(self, msg: [Message, None] = None):
+        self.pair_list: PairList = PairList()
+        self.markets = None
+        self.tickers = None
 
-async def get_arbitrage(exchange_names):
-    arbitrage_opportunities = {
-        "0.9-3": [],
-        "3-5": [],
-        "5-8": [],
-        "8+": []
-    }
-    print(exchange_names)
-    exchanges = [getattr(ccxt, exchange_name)() for exchange_name in exchange_names]
-    tickers = await asyncio.gather(*[get_tickers(exchange) for exchange in exchanges])
+        self.exchange_attempts = {}
+        self.state = 1
+        self.req_exchange = None
 
-    for symbol, ticker in tickers[0].items():
-        if any(symbol in exchange_tickers for exchange_tickers in tickers):
-            for i in range(len(exchange_names)):
-                for j in range(i + 1, len(exchange_names)):
-                    if symbol in tickers[i] and symbol in tickers[j]:
-                        ask_i = tickers[i][symbol]['ask']  # Покупка
-                        bid_j = tickers[j][symbol]['bid']  # Продажа
-                        if ask_i and bid_j and ask_i != 0 and ask_i < bid_j:
-                            if tickers[i][symbol].get('askVolume') and tickers[j][symbol].get('bidVolume'):
-                                opportunity = (bid_j / ask_i - 1) * 100
-                                if opportunity > 0 and \
-                                        tickers[i][symbol]['askVolume'] and tickers[j][symbol]['bidVolume']:
-                                    symbol_arbitrage = {
-                                        'symbol': symbol,
-                                        'buy_exchange': exchange_names[i],
-                                        'sell_exchange': exchange_names[j],
-                                        'opportunity': opportunity,
-                                        'buy_volume': tickers[i][symbol]['askVolume'],
-                                        'sell_volume': tickers[j][symbol]['bidVolume']
-                                    }
-                                    if opportunity >= 8:
-                                        arbitrage_opportunities["8+"].append(symbol_arbitrage)
-                                    elif opportunity >= 5:
-                                        arbitrage_opportunities["5-8"].append(symbol_arbitrage)
-                                    elif opportunity >= 3:
-                                        arbitrage_opportunities["3-5"].append(symbol_arbitrage)
-                                    elif opportunity >= 0.9:
-                                        arbitrage_opportunities["0.9-3"].append(symbol_arbitrage)
+        self.arbitrage_opportunities = []
+        self.msg = msg
 
-    arbitrage_opportunities = {
-        k: sorted(v, reverse=True, key=lambda x: x['opportunity']) for k, v in arbitrage_opportunities.items()
-    }
+    async def get_state(self):
+        match self.state:
+            case 1:
+                return "Инициализация алгоритма"
+            case 2.1:
+                return f"Получение данных от {self.req_exchange}"
+            case 2.2:
+                return f"Ошибка получения данных от {self.req_exchange}," \
+                       f" повторный запрос...\nПопытка {self.exchange_attempts[self.req_exchange]}"
+            case 3:
+                return f"Анализ данных"
+            case 4:
+                return "Сортировка"
 
-    await asyncio.gather(*[exchange.close() for exchange in exchanges])
-    return arbitrage_opportunities
+    async def edit_info_message(self):
+        text = await self.get_state()
+        if self.msg:
+            try:
+                await self.msg.edit_text(text=textwrap.dedent(text))
+            except MessageNotModified:
+                pass
+        else:
+            print(text)
+
+    async def get_tickers(self, exchange, name):
+        if self.exchange_attempts[exchange.id] == 4:
+            return name, []
+        self.req_exchange = exchange.id
+        self.exchange_attempts[exchange.id] += 1
+        await self.edit_info_message()
+
+        try:
+            tickers = await exchange.fetch_tickers()
+        except RequestTimeout:
+            self.state = 2.2
+            return await self.get_tickers(exchange, name)
+        finally:
+            self.exchange_attempts[exchange.id] = 0
+            await exchange.close()
+
+        self.exchange_attempts[exchange.id] = 0
+        return name, tickers
+
+    async def get_markets(self, exchange):
+        if self.exchange_attempts[exchange.id] == 4:
+            return []
+        self.req_exchange = exchange.id
+        self.exchange_attempts[exchange.id] += 1
+        await self.edit_info_message()
+
+        try:
+            markets = await exchange.load_markets()
+        except RequestTimeout:
+            self.state = 2.2
+            return await self.get_markets(exchange)
+        finally:
+            self.exchange_attempts[exchange.id] = 0
+            await exchange.close()
+
+        self.exchange_attempts[exchange.id] = 0
+        return markets
+
+    async def verify_all_pairs(self, exchange_names):
+        for pair in self.arbitrage_opportunities:
+            symbol = pair['symbol']
+            indexes = [
+                exchange_names.index(pair["buy_exchange"]),
+                exchange_names.index(pair["sell_exchange"])
+            ]
+            markets = [
+                self.markets[indexes[0]][symbol],
+                self.markets[indexes[1]][symbol]
+            ]
+            if 'contractAddress' in markets[0] and 'contractAddress' in markets[1]:
+                print(markets[0]['contractAddress'], markets[1]['contractAddress'])
+                pair['verified'] = markets[0]['contractAddress'] == markets[1]['contractAddress']
+            else:
+                print(f"Not found contract addresses for {symbol}")
+                pair['verified'] = False
+
+    async def get_arbitrage(self, exchange_names, chosen_percents):
+        self.arbitrage_opportunities.clear()
+        exchanges = [getattr(ccxt, exchange_name)() for exchange_name in exchange_names]
+        self.exchange_attempts = {exchange_name: 0 for exchange_name in exchange_names}
+        self.state = 2.1
+        self.markets = await asyncio.gather(
+            *[self.get_markets(exchange) for exchange in exchanges]
+        )
+        self.tickers: list[dict] = await asyncio.gather(
+            *[self.get_tickers(exchange, name) for exchange, name in zip(exchanges, exchange_names)]
+        )
+
+        for ticker in self.tickers:
+            exchange_name = ticker[0]
+            for dict_pair_symbol, dict_pair in ticker[-1].items():
+                if dict_pair.get('askVolume') and dict_pair.get('bidVolume'):
+                    pair = Pair(dict_pair_symbol, exchange_name, dict_pair["bid"], dict_pair["ask"])
+                    self.pair_list.append(pair)
+
+        self.state = 3
+        await asyncio.gather(*[exchange.close() for exchange in exchanges])
+
+        self.arbitrage_opportunities = self.pair_list.get_arbitrage()
+        return self.arbitrage_opportunities
 
 
 if __name__ == '__main__':
+    test = CcxtAPI()
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(get_arbitrage(["binance", "huobipro", "kucoin", "bybit", "gate", "mexc"]))
+    loop.run_until_complete(test.get_arbitrage(
+        ["binance", "huobipro", "kucoin", "bybit", "gate", "mexc"],
+        "0.9-3"
+    ))
